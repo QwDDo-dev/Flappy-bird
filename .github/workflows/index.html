@@ -1,43 +1,656 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+<!doctype html>
+<html lang="en">
 
-on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Flappy Classic — single file</title>
+    <style>
+         :root {
+            --bg1: #70c5ce;
+            --bg2: #cceef6;
+            --pipe: #5ad1b3;
+            --ground: #ded895;
+            --ui: #ffffff;
+        }
+        
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            background: linear-gradient(var(--bg1), var(--bg2));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, Helvetica, sans-serif
+        }
+        
+        #wrap {
+            width: 360px;
+            max-width: 95vw;
+            height: 640px;
+            max-height: 95vh;
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+            background: #7ec8ff
+        }
+        
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: transparent
+        }
+        
+        .overlay {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto
+        }
+        
+        .menu,
+        .game-over {
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(4px);
+            padding: 18px;
+            border-radius: 10px;
+            color: var(--ui);
+            text-align: center;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3)
+        }
+        
+        h1 {
+            margin: 0 0 8px;
+            font-size: 20px
+        }
+        
+        .hint {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.9);
+            margin-top: 8px
+        }
+        
+        .btn {
+            margin-top: 12px;
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: none;
+            background: #ffd166;
+            color: #111;
+            font-weight: 700;
+            cursor: pointer
+        }
+        
+        #scoreDisplay {
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            color: white;
+            font-size: 34px;
+            font-weight: 700;
+            text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45)
+        }
+        
+        #mute {
+            position: absolute;
+            right: 10px;
+            top: 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border: none;
+            color: white;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer
+        }
+        
+        @media (max-width:420px) {
+            #scoreDisplay {
+                font-size: 28px
+            }
+        }
+    </style>
+</head>
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+<body>
+    <div id="wrap">
+        <canvas id="c"></canvas>
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+        <div id="scoreDisplay">0</div>
+        <button id="mute">Mute</button>
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+        <div id="menuOverlay" class="overlay">
+            <div class="menu">
+                <h1>Flappy Classic</h1>
+                <div>Tap / Click or press <strong>Space</strong> to flap.</div>
+                <div class="hint">Try to pass through the pipes. Game gets slightly faster over time.</div>
+                <button class="btn" id="startBtn">Start</button>
+                <div style="margin-top:8px;font-size:13px;color:rgba(255,255,255,0.85)">High score: <span id="hsMain">0</span></div>
+            </div>
+        </div>
 
-jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          # Upload entire repository
-          path: '.'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+        <div id="overOverlay" class="overlay" style="display:none;pointer-events:auto">
+            <div class="game-over">
+                <h1>Game Over</h1>
+                <div style="font-size:28px;font-weight:800" id="finalScore">0</div>
+                <div style="margin-top:8px;color:rgba(255,255,255,0.9)">High score: <span id="finalHigh">0</span></div>
+                <button class="btn" id="retryBtn">Restart</button>
+                <div style="margin-top:8px"><button class="btn" id="menuBtn" style="background:#ffffff;color:#111">Menu</button></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /*
+          Flappy Classic — single-file implementation
+          - Fixed pipe spawn (spawns continuously, independent of frames)
+          - Classic design & mechanics
+          - Score + highscore saved to localStorage
+          - Works on mobile and desktop (tap, click, or Space)
+        */
+
+        (() => {
+            // Canvas & scaling
+            const canvas = document.getElementById('c');
+            const ctx = canvas.getContext('2d');
+            const wrap = document.getElementById('wrap');
+
+            let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+            function resizeCanvas() {
+                const rect = wrap.getBoundingClientRect();
+                canvas.style.width = rect.width + 'px';
+                canvas.style.height = rect.height + 'px';
+                canvas.width = Math.floor(rect.width * DPR);
+                canvas.height = Math.floor(rect.height * DPR);
+                ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+                W = Math.floor(rect.width);
+                H = Math.floor(rect.height);
+            }
+            window.addEventListener('resize', resizeCanvas);
+
+            // Game variables
+            let W = 360,
+                H = 640;
+            resizeCanvas();
+
+            const groundH = 100;
+            const birdRadius = 12;
+            const birdX = Math.floor(W * 0.25);
+
+            // Physics
+            const GRAV = 1000; // px/s^2
+            const FLAP_V = -320; // px/s (impulse)
+            let baseSpeed = 150; // pipe speed px/s, increases slightly
+            const speedIncrease = 6; // per 10s small ramp
+
+            // spawning
+            let spawnInterval = 1.6; // seconds between pipe sets
+            let spawnTimer = 0;
+
+            // pipe sizes
+            const pipeW = 58;
+            const gapMin = 110;
+            const gapMax = 160;
+
+            // game state
+            let state = 'menu'; // menu, playing, over
+            let score = 0;
+            const HS_KEY = 'flappy_classic_hs_v1';
+            let highScore = parseInt(localStorage.getItem(HS_KEY) || '0', 10) || 0;
+
+            // Entities
+            let bird = {
+                x: birdX,
+                y: H / 2,
+                vy: 0,
+                rot: 0,
+                wing: 0
+            };
+            let pipes = []; // each: {x, gapY, gapH, passed:false}
+
+            // UI
+            const scoreEl = document.getElementById('scoreDisplay');
+            const hsMain = document.getElementById('hsMain');
+            hsMain.textContent = highScore;
+            const menuOverlay = document.getElementById('menuOverlay');
+            const overOverlay = document.getElementById('overOverlay');
+            const finalScore = document.getElementById('finalScore');
+            const finalHigh = document.getElementById('finalHigh');
+            const startBtn = document.getElementById('startBtn');
+            const retryBtn = document.getElementById('retryBtn');
+            const menuBtn = document.getElementById('menuBtn');
+            const muteBtn = document.getElementById('mute');
+
+            // Audio (simple tones via WebAudio) — created after first user gesture
+            let audioCtx = null;
+            let muted = false;
+
+            function ensureAudio() {
+                if (!audioCtx) audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+            }
+
+            function playTone(type) {
+                if (muted) return;
+                ensureAudio();
+                const t = audioCtx.currentTime;
+                const o = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                o.connect(g);
+                g.connect(audioCtx.destination);
+                if (type === 'flap') {
+                    o.type = 'sine';
+                    o.frequency.setValueAtTime(600, t);
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.exponentialRampToValueAtTime(0.08, t + 0.01);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+                    o.start(t);
+                    o.stop(t + 0.13);
+                } else if (type === 'score') {
+                    o.type = 'triangle';
+                    o.frequency.setValueAtTime(1100, t);
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.exponentialRampToValueAtTime(0.09, t + 0.01);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+                    o.start(t);
+                    o.stop(t + 0.22);
+                } else if (type === 'hit') {
+                    o.type = 'square';
+                    o.frequency.setValueAtTime(140, t);
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.exponentialRampToValueAtTime(0.12, t + 0.01);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+                    o.start(t);
+                    o.stop(t + 0.62);
+                } else if (type === 'ui') {
+                    o.type = 'sine';
+                    o.frequency.setValueAtTime(800, t);
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.exponentialRampToValueAtTime(0.05, t + 0.01);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+                    o.start(t);
+                    o.stop(t + 0.14);
+                }
+            }
+
+            muteBtn.addEventListener('click', () => {
+                muted = !muted;
+                muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+                playTone('ui');
+            });
+
+            // helpers
+            function rand(a, b) {
+                return a + Math.random() * (b - a);
+            }
+
+            function clamp(v, a, b) {
+                return Math.max(a, Math.min(b, v));
+            }
+
+            // spawn pipe set
+            function spawnPipe() {
+                const gap = Math.floor(rand(gapMin, gapMax));
+                const gapY = Math.floor(rand(40, H - groundH - gap - 30));
+                pipes.push({
+                    x: W + 20,
+                    gapY: gapY,
+                    gapH: gap,
+                    passed: false
+                });
+            }
+
+            // collision: circle vs rect
+            function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
+                const closestX = clamp(cx, rx, rx + rw);
+                const closestY = clamp(cy, ry, ry + rh);
+                const dx = cx - closestX;
+                const dy = cy - closestY;
+                return (dx * dx + dy * dy) < (r * r);
+            }
+
+            // reset game
+            function reset() {
+                pipes = [];
+                score = 0;
+                baseSpeed = 150;
+                spawnTimer = 0;
+                bird.y = H / 2;
+                bird.vy = 0;
+                bird.rot = 0;
+                bird.wing = 0;
+                scoreEl.textContent = '0';
+                finalHigh.textContent = highScore;
+            }
+
+            // start
+            function startGame() {
+                reset();
+                menuOverlay.style.display = 'none';
+                overOverlay.style.display = 'none';
+                state = 'playing';
+                lastTS = null;
+                playTone('ui');
+                requestAnimationFrame(loop);
+            }
+
+            function endGame() {
+                state = 'over';
+                playTone('hit');
+                finalScore.textContent = score;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem(HS_KEY, String(highScore));
+                }
+                finalHigh.textContent = highScore;
+                hsMain.textContent = highScore;
+                overOverlay.style.display = 'flex';
+            }
+
+            // input handlers
+            function doFlap() {
+                if (state === 'menu') {
+                    startGame();
+                    return;
+                }
+                if (state === 'over') {
+                    startGame();
+                    return;
+                }
+                // playing
+                bird.vy = FLAP_V;
+                bird.wing += 0.8;
+                playTone('flap');
+            }
+
+            // pointer/keyboard
+            window.addEventListener('keydown', (e) => {
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                    if (!audioCtx) {
+                        ensureAudio();
+                    }
+                    doFlap();
+                }
+            });
+
+            canvas.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                if (!audioCtx) {
+                    ensureAudio();
+                }
+                doFlap();
+            });
+
+            // UI buttons
+            startBtn.addEventListener('click', startGame);
+            retryBtn.addEventListener('click', startGame);
+            menuBtn.addEventListener('click', () => {
+                state = 'menu';
+                overOverlay.style.display = 'none';
+                menuOverlay.style.display = 'flex';
+            });
+
+            // initial menu overlay shown
+            menuOverlay.style.display = 'flex';
+            overOverlay.style.display = 'none';
+
+            // main loop
+            let lastTS = null;
+            let speedTimer = 0;
+
+            function loop(ts) {
+                if (!lastTS) lastTS = ts;
+                const dt = Math.min(0.033, (ts - lastTS) / 1000); // cap dt to avoid big jumps
+                lastTS = ts;
+
+                // update only while playing
+                if (state === 'playing') {
+                    // bird physics
+                    bird.vy += GRAV * dt;
+                    bird.y += bird.vy * dt;
+                    bird.wing += dt * 18;
+                    bird.rot = clamp(bird.vy / 400, -0.7, 1.2);
+
+                    // spawn pipes on time-based timer (not frame-based)
+                    spawnTimer += dt;
+                    if (spawnTimer >= spawnInterval) {
+                        spawnPipe();
+                        spawnTimer -= spawnInterval;
+                    }
+
+                    // move pipes
+                    for (let p of pipes) {
+                        p.x -= baseSpeed * dt;
+                    }
+
+                    // scoring & remove offscreen
+                    for (let i = pipes.length - 1; i >= 0; i--) {
+                        const p = pipes[i];
+                        // one pipe object represents pipe SET; we put only one object per SET, with top and bottom inferred
+                        // we track passed when pipe's right edge < bird.x
+                        if (!p.passed && (p.x + pipeW) < bird.x) {
+                            p.passed = true;
+                            score++;
+                            scoreEl.textContent = String(score);
+                            playTone('score');
+                        }
+                        // remove when completely off screen
+                        if (p.x + pipeW < -50) {
+                            pipes.splice(i, 1);
+                        }
+                    }
+
+                    // collisions
+                    // ground / ceiling
+                    if (bird.y + birdRadius >= H - groundH) {
+                        bird.y = H - groundH - birdRadius;
+                        endGame();
+                    }
+                    if (bird.y - birdRadius <= 0) {
+                        bird.y = birdRadius;
+                        endGame();
+                    }
+
+                    // check pipe collisions
+                    for (let p of pipes) {
+                        // top rect
+                        if (circleRectCollision(bird.x, bird.y, birdRadius, p.x, 0, pipeW, p.gapY)) {
+                            endGame();
+                            break;
+                        }
+                        // bottom rect
+                        const bottomY = p.gapY + p.gapH;
+                        const bottomH = (H - groundH) - bottomY;
+                        if (circleRectCollision(bird.x, bird.y, birdRadius, p.x, bottomY, pipeW, bottomH)) {
+                            endGame();
+                            break;
+                        }
+                    }
+
+                    // slow speed increase over time
+                    speedTimer += dt;
+                    if (speedTimer >= 10) {
+                        baseSpeed += speedIncrease;
+                        speedTimer = 0;
+                    }
+                }
+
+                // render everything
+                render(ts);
+
+                // keep animating as long as playing or in menu (so background animates)
+                if (state === 'playing' || state === 'menu') {
+                    requestAnimationFrame(loop);
+                }
+            }
+
+            // drawing
+            function render(ts) {
+                ctx.clearRect(0, 0, W, H);
+
+                // background: simple gradient + moving clouds - classic flat look
+                const g = ctx.createLinearGradient(0, 0, 0, H);
+                g.addColorStop(0, '#70c5ce');
+                g.addColorStop(1, '#cceef6');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, W, H);
+
+                // simple parallax clouds
+                const t = ts / 1000;
+                ctx.save();
+                ctx.globalAlpha = 0.9;
+                for (let i = 0; i < 5; i++) {
+                    const cx = ((i * 200) - (t * 30 * (0.5 + i * 0.1))) % (W + 200) - 100;
+                    const cy = 60 + (i % 2) * 20;
+                    drawCloud(cx, cy, 1.0 - i * 0.08);
+                }
+                ctx.restore();
+
+                // pipes
+                for (let p of pipes) {
+                    drawPipe(p);
+                }
+
+                // ground
+                drawGround(t);
+
+                // bird
+                drawBird(bird);
+
+                // score already shown in DOM, but draw small subtle shadow if preferred
+            }
+
+            function drawCloud(x, y, alpha) {
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                ctx.beginPath();
+                ctx.ellipse(x, y, 34, 22, 0, 0, Math.PI * 2);
+                ctx.ellipse(x + 30, y + 6, 26, 18, 0, 0, Math.PI * 2);
+                ctx.ellipse(x - 28, y + 6, 25, 16, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            function drawPipe(p) {
+                const x = p.x;
+                const topH = p.gapY;
+                const bottomY = p.gapY + p.gapH;
+                const bottomH = (H - groundH) - bottomY;
+
+                // pipe color and shading (simple)
+                ctx.save();
+                // top pipe
+                ctx.fillStyle = '#56c5a8';
+                ctx.fillRect(x, 0, pipeW, topH);
+                // cap shading
+                ctx.fillStyle = '#3ea68a';
+                ctx.fillRect(x - 2, topH - 12, pipeW + 4, 12);
+
+                // bottom pipe
+                ctx.fillStyle = '#56c5a8';
+                ctx.fillRect(x, bottomY, pipeW, bottomH);
+                ctx.fillStyle = '#3ea68a';
+                ctx.fillRect(x - 2, bottomY, pipeW + 4, 12);
+
+                // small highlight
+                ctx.globalAlpha = 0.06;
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x + pipeW - 8, 0, 8, topH + bottomH + 40);
+                ctx.restore();
+            }
+
+            function drawGround(t) {
+                const y = H - groundH;
+                ctx.save();
+                ctx.fillStyle = '#ded895';
+                ctx.fillRect(0, y, W, groundH);
+                // moving texture
+                ctx.globalAlpha = 0.12;
+                const offset = (t * 80) % 40;
+                for (let i = -40; i < W + 40; i += 20) {
+                    ctx.fillRect(i + offset, y + groundH - 16, 12, 6);
+                }
+                ctx.restore();
+            }
+
+            function drawBird(b) {
+                ctx.save();
+                ctx.translate(b.x, b.y);
+                ctx.rotate(b.rot);
+                // body
+                ctx.fillStyle = '#ffd400';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, birdRadius + 2, birdRadius, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // cheek
+                ctx.fillStyle = 'rgba(255,255,255,0.16)';
+                ctx.beginPath();
+                ctx.ellipse(-4, -2, 5, 3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // eye
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.ellipse(4, -4, 3, 3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.beginPath();
+                ctx.ellipse(5, -5, 0.8, 0.8, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // wing (animated)
+                const wingAngle = Math.sin(b.wing) * 0.9;
+                ctx.save();
+                ctx.translate(-2, 2);
+                ctx.rotate(wingAngle);
+                ctx.fillStyle = '#f1b400';
+                ctx.beginPath();
+                ctx.ellipse(-4, 0, 9, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+                // beak
+                ctx.fillStyle = '#ff8c00';
+                ctx.beginPath();
+                ctx.moveTo(12, 0);
+                ctx.lineTo(18, -4);
+                ctx.lineTo(18, 4);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // initialize: show menu and keep background animating
+            // Pre-spawn a couple of pipes so gameplay looks consistent when starting quickly
+            for (let i = 0; i < 2; i++) spawnPipe();
+
+            // Kick off a background animation even while in menu (so clouds move)
+            requestAnimationFrame(loop);
+
+            // Ensure audio context created after first user gesture for autoplay rules:
+            document.addEventListener('pointerdown', function once() {
+                ensureAudio();
+                document.removeEventListener('pointerdown', once);
+            }, {
+                once: true
+            });
+
+            // prevent page scroll on mobile when touching canvas
+            canvas.addEventListener('touchstart', e => {
+                e.preventDefault();
+            }, {
+                passive: false
+            });
+
+            // done
+        })();
+    </script>
+</body>
+
+</html>
